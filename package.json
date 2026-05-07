@@ -2,6 +2,7 @@
   "name": "plandex",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.33.4",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,9 +10,15 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@prisma/adapter-mssql": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "dotenv": "^17.4.2",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "next": "16.2.5",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -20,6 +27,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.5",
+    "prisma": "^7.8.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
