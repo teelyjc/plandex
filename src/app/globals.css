@@ -236,3 +236,221 @@ textarea {
 .dark .document-page [class*="border-[#222]"] {
   border-color: #222222 !important;
 }
+
+.timetable-shell {
+  border: 1px solid #d6d2c8 !important;
+  background: #fbfaf7 !important;
+  color: #1f2623 !important;
+}
+
+.timetable-toolbar {
+  border-bottom: 1px solid #d6d2c8 !important;
+  background: #ffffff !important;
+}
+
+.timetable-nav-button,
+.timetable-filter-button {
+  border: 1px solid #d6d2c8 !important;
+  background: transparent !important;
+  color: #24302a !important;
+}
+
+.timetable-nav-button:hover,
+.timetable-filter-button:hover {
+  background: #f4f1ea !important;
+}
+
+.timetable-month-label {
+  color: #17201c !important;
+}
+
+.timetable-calendar-surface,
+.timetable-task-lane {
+  background: #ffffff !important;
+}
+
+.timetable-weekday-header {
+  border-bottom: 1px solid #d6d2c8 !important;
+  background: #f4f1ea !important;
+  color: #3d4742 !important;
+}
+
+.timetable-week-row {
+  border-bottom: 1px solid #dedbd2 !important;
+}
+
+.timetable-date-cell {
+  border-right: 1px solid #dedbd2 !important;
+}
+
+.timetable-date-current {
+  background: #ffffff !important;
+}
+
+.timetable-date-adjacent {
+  background: #f2efee !important;
+}
+
+.timetable-date-number {
+  color: #5d6660 !important;
+}
+
+.timetable-date-number-muted {
+  color: #b5afa8 !important;
+}
+
+.timetable-count-pill {
+  background: #f0ece3 !important;
+  color: #58635d !important;
+}
+
+.timetable-sidebar {
+  border-left: 1px solid #d6d2c8 !important;
+  background: #ffffff !important;
+  color: #1f2623 !important;
+}
+
+.timetable-empty-state {
+  border-color: #d6d2c8 !important;
+  color: #66736d !important;
+}
+
+.timetable-status-badge {
+  background: rgb(255 255 255 / 0.5) !important;
+}
+
+.timetable-status-backlog {
+  border-color: #8d96a0 !important;
+  background: #f0f2f4 !important;
+  color: #2f3740 !important;
+}
+
+.timetable-status-ready {
+  border-color: #e8c64d !important;
+  background: #ffe88a !important;
+  color: #3d3320 !important;
+}
+
+.timetable-status-active {
+  border-color: #62a7eb !important;
+  background: #70b5ff !important;
+  color: #172d43 !important;
+}
+
+.timetable-status-review {
+  border-color: #c078e7 !important;
+  background: #eca1ef !important;
+  color: #37203b !important;
+}
+
+.timetable-status-done {
+  border-color: #99cc57 !important;
+  background: #c8e77c !important;
+  color: #263719 !important;
+}
+
+.dark .timetable-shell {
+  border-color: #314137;
+  background: #0f1712;
+  color: #e8ece8;
+}
+
+.dark .timetable-toolbar,
+.dark .timetable-weekday-header {
+  border-color: #34423a;
+  background: #1c2420;
+  color: #d7e0da;
+}
+
+.dark .timetable-nav-button,
+.dark .timetable-filter-button {
+  border-color: #4d5d53;
+  color: #e8ece8;
+}
+
+.dark .timetable-nav-button:hover,
+.dark .timetable-filter-button:hover {
+  background: #27342d;
+}
+
+.dark .timetable-month-label {
+  color: #f2f7f3;
+}
+
+.dark .timetable-calendar-surface,
+.dark .timetable-task-lane {
+  background: #101812;
+}
+
+.dark .timetable-week-row {
+  border-color: #314137;
+}
+
+.dark .timetable-date-cell {
+  border-color: #314137;
+}
+
+.dark .timetable-date-current {
+  background: #101812;
+}
+
+.dark .timetable-date-adjacent {
+  background: #18211c;
+}
+
+.dark .timetable-date-number {
+  color: #8ca096;
+}
+
+.dark .timetable-date-number-muted {
+  color: #58685f;
+}
+
+.dark .timetable-count-pill {
+  background: #27342d;
+  color: #c9d7cf;
+}
+
+.dark .timetable-sidebar {
+  background: #171d23;
+  color: #f1f5f2;
+}
+
+.dark .timetable-empty-state {
+  border-color: #4d5d53;
+  color: #aebdb4;
+}
+
+.dark .timetable-status-badge {
+  background: rgb(0 0 0 / 0.28);
+}
+
+.dark .timetable-status-backlog {
+  border-color: #74818b;
+  background: #2a343c;
+  color: #d8e1e7;
+}
+
+.dark .timetable-status-ready {
+  border-color: #d4b93f;
+  background: #5b4d16;
+  color: #fff2a3;
+}
+
+.dark .timetable-status-active {
+  border-color: #4d93df;
+  background: #153f66;
+  color: #b9dcff;
+}
+
+.dark .timetable-status-review {
+  border-color: #af74d4;
+  background: #432253;
+  color: #f2c6ff;
+}
+
+.dark .timetable-status-done {
+  border-color: #88ba4e;
+  background: #2d4a20;
+  color: #d5f2af;
+}
