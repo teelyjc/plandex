@@ -1,20 +1,26 @@
 FROM node:22 AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+COPY ./certs/kaspersky.cer /usr/local/share/ca-certificates/kaspersky.crt
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/kaspersky.crt
 RUN corepack enable
 
 FROM base AS deps
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 
-COPY ./certs/ /usr/local/share/ca-certificates/
-RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates
-
 RUN pnpm install --frozen-lockfile
 
 FROM base AS builder
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+
+COPY .env.production .env
+
 RUN pnpm prisma generate
 RUN pnpm build
 
