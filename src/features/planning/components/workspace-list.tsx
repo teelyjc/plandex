@@ -1,21 +1,65 @@
 "use client";
 
-import Link from "next/link";
-import type { ReactNode } from "react";
-import { useState } from "react";
-import { createWorkspace, deleteWorkspace, updateWorkspace } from "../actions/planning-actions";
-import type { PlanningSnapshot, Workspace } from "../types/planning";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { createUser } from "../actions/create-user";
+import { createWorkspace } from "../actions/create-workspace";
+import { updateUser } from "../actions/update-user";
+import { updateWorkspace } from "../actions/update-workspace";
+import type { PlanningSnapshot, User, Workspace } from "../types/planning";
+import { DeleteWorkspaceForm } from "./delete-workspace-form";
+import { Modal } from "./modal";
+import { UserForm } from "./user-form";
+import { WorkspaceCard } from "./workspace-card";
+import { WorkspaceForm } from "./workspace-form";
 
 type WorkspaceListProps = {
   snapshot: PlanningSnapshot;
 };
 
+const viewingUserStorageKey = "plandex.viewingUserId";
+const performingUserStorageKey = "plandex.performingUserId";
+const allViewingUsersValue = "all";
+
+function getStoredUserId(storageKey: string, users: User[]) {
+  if (typeof window === "undefined") {
+    return users[0]?.id ?? "";
+  }
+
+  const storedUserId = window.localStorage.getItem(storageKey);
+  if (storageKey === viewingUserStorageKey && storedUserId === allViewingUsersValue) {
+    return allViewingUsersValue;
+  }
+
+  return users.find((user) => user.id === storedUserId)?.id ?? users[0]?.id ?? "";
+}
+
 export function WorkspaceList({ snapshot }: WorkspaceListProps) {
+  const router = useRouter();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isCreateUserOpen, setIsCreateUserOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editingWorkspace, setEditingWorkspace] = useState<Workspace | null>(null);
   const [deletingWorkspace, setDeletingWorkspace] = useState<Workspace | null>(null);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
-  const workspaceStats = snapshot.workspaces.map((workspace) => {
+  const [viewingUserId, setViewingUserId] = useState(() =>
+    getStoredUserId(viewingUserStorageKey, snapshot.users),
+  );
+  const [performingUserId, setPerformingUserId] = useState(() =>
+    getStoredUserId(performingUserStorageKey, snapshot.users),
+  );
+  const viewingUser =
+    viewingUserId === allViewingUsersValue
+      ? null
+      : snapshot.users.find((user) => user.id === viewingUserId) ?? snapshot.users[0];
+  const performingUser =
+    snapshot.users.find((user) => user.id === performingUserId) ?? snapshot.users[0];
+  const visibleWorkspaces = viewingUserId === allViewingUsersValue
+    ? snapshot.workspaces
+    : viewingUser
+    ? snapshot.workspaces.filter((workspace) => workspace.ownerId === viewingUser.id)
+    : snapshot.workspaces;
+  const workspaceStats = visibleWorkspaces.map((workspace) => {
     const boards = snapshot.boards.filter((board) => board.workspaceId === workspace.id);
     const boardIds = new Set(boards.map((board) => board.id));
     const tasks = snapshot.tasks.filter((task) => boardIds.has(task.boardId));
@@ -28,6 +72,46 @@ export function WorkspaceList({ snapshot }: WorkspaceListProps) {
       openTasks,
     };
   });
+
+  useEffect(() => {
+    if (viewingUserId) {
+      window.localStorage.setItem(viewingUserStorageKey, viewingUserId);
+    }
+  }, [viewingUserId]);
+
+  useEffect(() => {
+    if (performingUser?.id) {
+      window.localStorage.setItem(performingUserStorageKey, performingUser.id);
+    }
+  }, [performingUser?.id]);
+
+  function changeViewingUser(userId: string) {
+    setViewingUserId(userId);
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(viewingUserStorageKey, userId);
+    }
+  }
+
+  function changePerformingUser(userId: string) {
+    setPerformingUserId(userId);
+
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(performingUserStorageKey, userId);
+    }
+  }
+
+  async function createUserAndSelect(formData: FormData) {
+    await createUser(formData);
+    setIsCreateUserOpen(false);
+    router.refresh();
+  }
+
+  async function updateUserAndClose(formData: FormData) {
+    await updateUser(formData);
+    setEditingUser(null);
+    router.refresh();
+  }
 
   return (
     <main className="bg-[#f7f6f2] text-[#1f2623]">
@@ -53,71 +137,123 @@ export function WorkspaceList({ snapshot }: WorkspaceListProps) {
           </button>
         </header>
 
+        {snapshot.users.length > 0 ? (
+          <section className="grid gap-3 rounded-lg border border-[#dedbd2] bg-white px-4 py-3 md:grid-cols-2">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#68736d]">
+                  Viewing as
+                </p>
+                <p className="mt-1 text-sm text-[#3d4742]">
+                  Filters the workspace list by owner.
+                </p>
+              </div>
+              <select
+                value={viewingUserId}
+                onChange={(event) => changeViewingUser(event.currentTarget.value)}
+                className="h-10 min-w-44 rounded-md border border-[#d6d2c8] bg-white px-3 text-sm font-semibold text-[#202924] outline-none focus:border-[#1f2623]"
+              >
+                <option value={allViewingUsersValue}>All</option>
+                {snapshot.users.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#ece8dd] pt-3 md:border-l md:border-t-0 md:pl-4 md:pt-0">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#68736d]">
+                  Performing as
+                </p>
+                <p className="mt-1 text-sm text-[#3d4742]">
+                  Defaults new workspace ownership.
+                </p>
+              </div>
+              <select
+                value={performingUser?.id ?? ""}
+                onChange={(event) => changePerformingUser(event.currentTarget.value)}
+                className="h-10 min-w-44 rounded-md border border-[#d6d2c8] bg-white px-3 text-sm font-semibold text-[#202924] outline-none focus:border-[#1f2623]"
+              >
+                {snapshot.users.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {user.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </section>
+        ) : null}
+
+        <section className="rounded-lg border border-[#dedbd2] bg-white px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold text-[#202924]">Users</h2>
+              <p className="mt-1 text-sm text-[#66736d]">
+                Add virtual users and assign workspace ownership.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsCreateUserOpen(true)}
+              className="h-9 rounded-md border border-[#d6d2c8] bg-white px-3 text-sm font-semibold text-[#24302a] hover:border-[#949b93]"
+            >
+              Add user
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {snapshot.users.map((user) => {
+              const ownedCount = snapshot.workspaces.filter(
+                (workspace) => workspace.ownerId === user.id,
+              ).length;
+
+              return (
+                <button
+                  key={user.id}
+                  type="button"
+                  onClick={() => setEditingUser(user)}
+                  className="inline-flex min-h-10 items-center gap-2 rounded-md border border-[#dedbd2] bg-[#fbfaf7] px-3 text-left text-sm hover:border-[#949b93]"
+                >
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: user.color }}
+                  />
+                  <span className="font-semibold text-[#202924]">{user.name}</span>
+                  <span className="text-xs text-[#66736d]">{ownedCount} workspace</span>
+                </button>
+              );
+            })}
+            {snapshot.users.length === 0 ? (
+              <p className="text-sm text-[#66736d]">
+                Add a user before creating owner-filtered workspaces.
+              </p>
+            ) : null}
+          </div>
+        </section>
+
         <section>
           <div className="grid auto-rows-fr gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {workspaceStats.map(({ workspace, boardCount, taskCount, openTasks }) => (
-              <article
+              <WorkspaceCard
                 key={workspace.id}
-                className="flex min-h-56 flex-col rounded-lg border border-[#dedbd2] bg-white p-4 transition hover:border-[#9ba39b]"
-              >
-                <Link href={`/workspaces/${workspace.id}`} className="flex flex-1 flex-col">
-                  <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3">
-                    <div className="min-w-0">
-                      <h2 className="break-words text-lg font-semibold leading-6 text-[#202924]">
-                        {workspace.name}
-                      </h2>
-                      <p className="mt-1 line-clamp-3 break-words text-sm leading-6 text-[#66736d]">
-                        {workspace.description || "No description"}
-                      </p>
-                    </div>
-                    <span className="shrink-0 rounded-md bg-[#e8f0ea] px-2 py-1 text-xs font-semibold text-[#2e6241]">
-                      Open
-                    </span>
-                  </div>
-                  <dl className="mt-auto grid grid-cols-3 gap-2 pt-4 text-xs text-[#66736d]">
-                    <div>
-                      <dt className="font-semibold text-[#3b463f]">Boards</dt>
-                      <dd className="mt-1">{boardCount}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-[#3b463f]">Tasks</dt>
-                      <dd className="mt-1">{taskCount}</dd>
-                    </div>
-                    <div>
-                      <dt className="font-semibold text-[#3b463f]">Open</dt>
-                      <dd className="mt-1">{openTasks}</dd>
-                    </div>
-                  </dl>
-                </Link>
-                <div className="mt-4 border-t border-[#ece8dd] pt-3">
-                  <ActionDropdown>
-                    <button
-                      type="button"
-                      onClick={() => setEditingWorkspace(workspace)}
-                      className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea]"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setDeletingWorkspace(workspace);
-                        setDeleteConfirmation("");
-                      }}
-                      className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#9f1d1d] hover:bg-[#fde8e8]"
-                    >
-                      Delete
-                    </button>
-                  </ActionDropdown>
-                </div>
-              </article>
+                workspace={workspace}
+                boardCount={boardCount}
+                taskCount={taskCount}
+                openTasks={openTasks}
+                onEdit={() => setEditingWorkspace(workspace)}
+                onDelete={() => {
+                  setDeletingWorkspace(workspace);
+                  setDeleteConfirmation("");
+                }}
+              />
             ))}
 
             {workspaceStats.length === 0 ? (
               <section className="rounded-lg border border-dashed border-[#c8c2b6] bg-white px-5 py-8 sm:col-span-2">
                 <h2 className="text-lg font-semibold text-[#202924]">No workspaces yet</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-[#66736d]">
-                  Create your first workspace to start planning.
+                  Create a workspace for {viewingUser?.name ?? "a user"} to start planning.
                 </p>
               </section>
             ) : null}
@@ -126,152 +262,59 @@ export function WorkspaceList({ snapshot }: WorkspaceListProps) {
       </section>
 
       {isCreateOpen ? (
-        <Modal title="Create workspace" onClose={() => setIsCreateOpen(false)}>
-          <WorkspaceForm action={createWorkspace} submitLabel="Create workspace" />
+        <Modal title="Create workspace" onClose={() => setIsCreateOpen(false)} size="sm">
+          <WorkspaceForm
+            action={createWorkspace}
+            ownerId={performingUser?.id}
+            users={snapshot.users}
+            submitLabel="Create workspace"
+          />
+        </Modal>
+      ) : null}
+
+      {isCreateUserOpen ? (
+        <Modal title="Add user" onClose={() => setIsCreateUserOpen(false)} size="sm">
+          <UserForm action={createUserAndSelect} submitLabel="Add user" />
+        </Modal>
+      ) : null}
+
+      {editingUser ? (
+        <Modal title="Edit user" onClose={() => setEditingUser(null)} size="sm">
+          <UserForm
+            action={updateUserAndClose}
+            user={editingUser}
+            submitLabel="Save user"
+          />
         </Modal>
       ) : null}
 
       {editingWorkspace ? (
-        <Modal title="Edit workspace" onClose={() => setEditingWorkspace(null)}>
+        <Modal title="Edit workspace" onClose={() => setEditingWorkspace(null)} size="sm">
           <WorkspaceForm
             action={async (formData) => {
               await updateWorkspace(formData);
               setEditingWorkspace(null);
             }}
-            workspace={editingWorkspace}
+            workspaceId={editingWorkspace.id}
+            ownerId={editingWorkspace.ownerId ?? performingUser?.id}
+            users={snapshot.users}
+            name={editingWorkspace.name}
+            description={editingWorkspace.description}
             submitLabel="Save workspace"
           />
         </Modal>
       ) : null}
 
       {deletingWorkspace ? (
-        <Modal title="Delete workspace" onClose={() => setDeletingWorkspace(null)}>
+        <Modal title="Delete workspace" onClose={() => setDeletingWorkspace(null)} size="sm">
           <DeleteWorkspaceForm
-            workspace={deletingWorkspace}
+            workspaceId={deletingWorkspace.id}
+            workspaceName={deletingWorkspace.name}
             confirmation={deleteConfirmation}
             onConfirmationChange={setDeleteConfirmation}
           />
         </Modal>
       ) : null}
     </main>
-  );
-}
-
-function DeleteWorkspaceForm({
-  workspace,
-  confirmation,
-  onConfirmationChange,
-}: {
-  workspace: Workspace;
-  confirmation: string;
-  onConfirmationChange: (value: string) => void;
-}) {
-  return (
-    <form action={deleteWorkspace} className="grid gap-3">
-      <input type="hidden" name="workspaceId" value={workspace.id} />
-      <p className="text-sm leading-6 text-[#66736d]">
-        Type <span className="font-semibold text-[#202924]">{workspace.name}</span> to confirm
-        deletion.
-      </p>
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Workspace name confirmation
-        <input
-          value={confirmation}
-          onChange={(event) => onConfirmationChange(event.currentTarget.value)}
-          className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <button
-        type="submit"
-        disabled={confirmation !== workspace.name}
-        className="h-10 rounded-md bg-[#9f1d1d] px-3 text-sm font-semibold text-white disabled:bg-[#d6a6a6]"
-      >
-        Delete workspace
-      </button>
-    </form>
-  );
-}
-
-function WorkspaceForm({
-  action,
-  workspace,
-  submitLabel,
-}: {
-  action: (formData: FormData) => void | Promise<void>;
-  workspace?: Workspace;
-  submitLabel: string;
-}) {
-  return (
-    <form action={action} className="grid gap-3">
-      {workspace ? <input type="hidden" name="workspaceId" value={workspace.id} /> : null}
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Workspace name
-        <input
-          name="name"
-          required
-          minLength={2}
-          defaultValue={workspace?.name}
-          placeholder="Workspace name"
-          className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Description
-        <textarea
-          name="description"
-          defaultValue={workspace?.description}
-          placeholder="Description"
-          rows={4}
-          className="min-h-24 rounded-md border border-[#d6d2c8] px-3 py-2 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <button
-        type="submit"
-        className="h-10 rounded-md bg-[#1f2623] px-3 text-sm font-semibold text-white"
-      >
-        {submitLabel}
-      </button>
-    </form>
-  );
-}
-
-function ActionDropdown({ children }: { children: ReactNode }) {
-  return (
-    <details className="relative inline-block">
-      <summary className="flex h-8 cursor-pointer list-none items-center rounded-md border border-[#d6d2c8] px-3 text-xs font-semibold text-[#24302a]">
-        Actions
-      </summary>
-      <div className="absolute right-0 z-20 mt-2 min-w-32 rounded-md border border-[#dedbd2] bg-white p-1 shadow-lg">
-        {children}
-      </div>
-    </details>
-  );
-}
-
-function Modal({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4">
-      <section className="w-full max-w-md rounded-lg border border-[#dedbd2] bg-white p-4 shadow-xl">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-[#202924]">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-8 rounded-md border border-[#d6d2c8] px-3 text-sm font-medium text-[#3d4742]"
-          >
-            Close
-          </button>
-        </div>
-        {children}
-      </section>
-    </div>
   );
 }
