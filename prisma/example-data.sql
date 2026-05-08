@@ -1,7 +1,13 @@
-INSERT INTO [dbo].[Workspace] ([id], [name], [description], [createdAt], [updatedAt])
+INSERT INTO [dbo].[Users] ([id], [name], [email], [color], [createdAt], [updatedAt])
 VALUES
-    ('workspace_work', 'Work', 'Product and delivery planning.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
-    ('workspace_personal', 'Personal', 'Personal planning and routines.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+    ('user_you', 'You', 'you@plandex.local', '#35624a', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+    ('user_design', 'Design', 'design@plandex.local', '#7c3aed', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+    ('user_delivery', 'Delivery', 'delivery@plandex.local', '#0f766e', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+
+INSERT INTO [dbo].[Workspace] ([id], [ownerId], [name], [description], [createdAt], [updatedAt])
+VALUES
+    ('workspace_work', 'user_you', 'Work', 'Product and delivery planning.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+    ('workspace_personal', 'user_design', 'Personal', 'Personal planning and routines.', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
 
 INSERT INTO [dbo].[Board] ([id], [workspaceId], [name], [description], [columnOrder], [createdAt], [updatedAt])
 VALUES
@@ -18,6 +24,8 @@ VALUES
 INSERT INTO [dbo].[Task] (
     [id],
     [boardId],
+    [ownerId],
+    [assigneeId],
     [title],
     [description],
     [status],
@@ -34,6 +42,8 @@ VALUES
     (
         'task_dependency_model',
         'board_product',
+        'user_you',
+        'user_delivery',
         'Map dependency model',
         'Define how blocked work, prerequisites, and release tasks connect.',
         'backlog',
@@ -49,6 +59,8 @@ VALUES
     (
         'task_planning_board',
         'board_product',
+        'user_you',
+        'user_delivery',
         'Build planning board',
         'Create the first usable Kanban workflow with readable task cards.',
         'active',
@@ -64,6 +76,8 @@ VALUES
     (
         'task_schedule_density',
         'board_product',
+        'user_delivery',
+        'user_design',
         'Review schedule density',
         'Check active workload and decide what can fit this week.',
         'ready',
@@ -79,6 +93,8 @@ VALUES
     (
         'task_weekly_reset',
         'board_personal',
+        'user_design',
+        'user_design',
         'Weekly reset',
         'Clear inboxes, pick priorities, and schedule focused blocks.',
         'ready',
