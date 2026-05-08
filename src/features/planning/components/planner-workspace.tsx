@@ -4,52 +4,78 @@ import { formatShortDate } from "@/lib/utils/format";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import {
-  createLabel,
-  createTask,
-  createTodo,
-  deleteLabel,
-  deleteTask,
-  deleteTodo,
-  deleteWorkspace,
-  updateLabel,
-  updateTask,
-  updateTaskStatus,
-  updateTodo,
-  updateTodoDone,
-  updateWorkspace,
-} from "../actions/planning-actions";
+import { createLabel } from "../actions/create-label";
+import { createTask } from "../actions/create-task";
+import { createTaskNote } from "../actions/create-task-note";
+import { createTodo } from "../actions/create-todo";
+import { deleteLabel } from "../actions/delete-label";
+import { deleteTask } from "../actions/delete-task";
+import { deleteTodo } from "../actions/delete-todo";
+import { updateLabel } from "../actions/update-label";
+import { updateTask } from "../actions/update-task";
+import { updateTaskStatus } from "../actions/update-task-status";
+import { updateTodo } from "../actions/update-todo";
+import { updateTodoDone } from "../actions/update-todo-done";
+import { updateWorkspace } from "../actions/update-workspace";
 import type { Label, PlanningSnapshot, Task, TaskStatus, TodoItem } from "../types/planning";
-
-const columnLabels: Record<TaskStatus, string> = {
-  backlog: "Backlog",
-  ready: "Ready",
-  active: "Active",
-  review: "Review",
-  done: "Done",
-};
-
-const defaultColumnOrder: TaskStatus[] = ["backlog", "ready", "active", "review", "done"];
-
-function calculateEstimateHours(startDate: string, dueDate: string) {
-  const start = new Date(`${startDate}T00:00:00`);
-  const due = new Date(`${dueDate}T00:00:00`);
-
-  if (Number.isNaN(start.getTime()) || Number.isNaN(due.getTime()) || due < start) {
-    return 1;
-  }
-
-  const days = Math.floor((due.getTime() - start.getTime()) / 86_400_000) + 1;
-  return Math.min(Math.max(days * 8, 1), 200);
-}
+import { ActionDropdown } from "./action-dropdown";
+import { DeleteWorkspaceForm } from "./delete-workspace-form";
+import { LabelForm } from "./label-form";
+import { Metric } from "./metric";
+import { Modal } from "./modal";
+import { Panel } from "./panel";
+import {
+  columnLabels,
+  defaultColumnOrder,
+  defaultTimetableStatuses,
+  statusRank,
+} from "./planning-constants";
+import { buildMonthDays, chunkMonthWeeks, toDateKey } from "./planning-date-utils";
+import { ReadonlyTimeTable } from "./readonly-time-table";
+import { TaskCard } from "./task-card";
+import { TaskDetails } from "./task-details";
+import { TaskForm } from "./task-form";
+import { TaskNoteForm } from "./task-note-form";
+import { TodoForm } from "./todo-form";
+import { TodoGroup } from "./todo-group";
+import { TodoRow } from "./todo-row";
+import { WorkspaceForm } from "./workspace-form";
 
 type PlannerWorkspaceProps = {
   initialSnapshot: PlanningSnapshot;
   initialWorkspaceId?: string;
 };
 
+function buildCascadedStatuses(tasks: Task[], taskId: string, status: TaskStatus) {
+  const cascadedStatuses = new Map<string, TaskStatus>([[taskId, status]]);
+  const queue = [taskId];
+  const visited = new Set<string>();
+
+  while (queue.length > 0) {
+    const dependencyId = queue.shift();
+
+    if (!dependencyId || visited.has(dependencyId)) {
+      continue;
+    }
+
+    visited.add(dependencyId);
+
+    for (const task of tasks) {
+      if (!task.dependencies.includes(dependencyId) || statusRank[task.status] <= statusRank[status]) {
+        continue;
+      }
+
+      cascadedStatuses.set(task.id, status);
+      queue.push(task.id);
+    }
+  }
+
+  return cascadedStatuses;
+}
+
 export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: PlannerWorkspaceProps) {
   const router = useRouter();
+  const [users] = useState(initialSnapshot.users);
   const [workspaces] = useState(initialSnapshot.workspaces);
   const [boards] = useState(initialSnapshot.boards);
   const [labels] = useState(initialSnapshot.labels);
@@ -61,10 +87,17 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [activeModal, setActiveModal] = useState<"workspace" | "task" | "todo" | "label" | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [viewingTask, setViewingTask] = useState<Task | null>(null);
+  const [notingTask, setNotingTask] = useState<Task | null>(null);
+  const [defaultTodoTaskId, setDefaultTodoTaskId] = useState("");
   const [editingTodo, setEditingTodo] = useState<TodoItem | null>(null);
   const [editingLabel, setEditingLabel] = useState<Label | null>(null);
   const [isDeletingWorkspace, setIsDeletingWorkspace] = useState(false);
   const [deleteWorkspaceConfirmation, setDeleteWorkspaceConfirmation] = useState("");
+  const [timetableMonth, setTimetableMonth] = useState(toDateKey(new Date()));
+  const [selectedTimetableStatuses, setSelectedTimetableStatuses] = useState<TaskStatus[]>(
+    defaultTimetableStatuses,
+  );
 
   const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId);
   const activeBoard =
@@ -73,6 +106,11 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
   const boardTasks = tasks.filter((task) => task.boardId === activeBoard?.id);
   const labelById = new Map(labels.map((label) => [label.id, label]));
   const tasksWithTodos = boardTasks.filter((task) => task.checklist.length > 0);
+  const timetableTasks = boardTasks
+    .filter((task) => selectedTimetableStatuses.includes(task.status))
+    .slice()
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const monthWeeks = chunkMonthWeeks(buildMonthDays(timetableMonth));
 
   const metrics = {
     done: boardTasks.filter((task) => task.status === "done").length,
@@ -95,6 +133,13 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
   async function createLabelAndRefresh(formData: FormData) {
     await createLabel(formData);
     setActiveModal(null);
+    router.refresh();
+  }
+
+  async function createTaskNoteAndRefresh(formData: FormData) {
+    await createTaskNote(formData);
+    setViewingTask(null);
+    setNotingTask(null);
     router.refresh();
   }
 
@@ -138,8 +183,26 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
   }
 
   async function moveTask(taskId: string, status: TaskStatus) {
+    const task = tasks.find((candidate) => candidate.id === taskId);
+    const blockingDependency = task?.dependencies
+      .map((dependencyId) => tasks.find((candidate) => candidate.id === dependencyId))
+      .find((dependency) => dependency && statusRank[status] > statusRank[dependency.status]);
+
+    if (blockingDependency) {
+      window.alert(
+        `This task cannot move past "${blockingDependency.title}" because it depends on that task.`,
+      );
+      setDraggedTaskId(null);
+      return;
+    }
+
+    const cascadedStatuses = buildCascadedStatuses(tasks, taskId, status);
+
     setTasks((current) =>
-      current.map((task) => (task.id === taskId ? { ...task, status } : task)),
+      current.map((task) => {
+        const cascadedStatus = cascadedStatuses.get(task.id);
+        return cascadedStatus ? { ...task, status: cascadedStatus } : task;
+      }),
     );
     setDraggedTaskId(null);
 
@@ -186,6 +249,16 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
       done,
     });
     router.refresh();
+  }
+
+  function toggleTimetableStatus(status: TaskStatus) {
+    setSelectedTimetableStatuses((current) => {
+      if (current.includes(status)) {
+        return current.filter((selectedStatus) => selectedStatus !== status);
+      }
+
+      return [...current, status];
+    });
   }
 
   return (
@@ -249,30 +322,33 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
         ) : null}
 
         <section className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2">
+          <ActionDropdown label="New">
             <button
               type="button"
               disabled={!activeBoard}
               onClick={() => setActiveModal("task")}
-              className="h-10 rounded-md bg-[#1f2623] px-4 text-sm font-semibold text-white disabled:bg-[#9aa39d]"
+              className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea] disabled:text-[#9aa39d]"
             >
-              New task
+              Task
             </button>
             <button
               type="button"
-              onClick={() => setActiveModal("todo")}
-              className="h-10 rounded-md border border-[#d6d2c8] bg-white px-4 text-sm font-semibold text-[#24302a]"
+              onClick={() => {
+                setDefaultTodoTaskId("");
+                setActiveModal("todo");
+              }}
+              className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea]"
             >
-              New todo
+              Todo
             </button>
             <button
               type="button"
               onClick={() => setActiveModal("label")}
-              className="h-10 rounded-md border border-[#d6d2c8] bg-white px-4 text-sm font-semibold text-[#24302a]"
+              className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea]"
             >
-              New label
+              Label
             </button>
-          </div>
+          </ActionDropdown>
           <Link
             href={`/workspaces/${activeWorkspaceId}/documents`}
             className="text-sm font-semibold text-[#285b40] underline underline-offset-4"
@@ -373,7 +449,13 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
                           labelById={labelById}
                           onDragStart={() => setDraggedTaskId(task.id)}
                           onToggleTodo={toggleTodo}
+                          onView={() => setViewingTask(task)}
                           onEdit={() => setEditingTask(task)}
+                          onAddTodo={() => {
+                            setDefaultTodoTaskId(task.id);
+                            setActiveModal("todo");
+                          }}
+                          onAddNote={() => setNotingTask(task)}
                           deleteAction={deleteTaskAndRefresh}
                           workspaceId={activeWorkspaceId}
                         />
@@ -384,6 +466,18 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
               })}
             </div>
           </div>
+
+          <Panel title="Read-only Time Table">
+            <ReadonlyTimeTable
+              timetableMonth={timetableMonth}
+              monthWeeks={monthWeeks}
+              timetableTasks={timetableTasks}
+              selectedTimetableStatuses={selectedTimetableStatuses}
+              onMonthChange={setTimetableMonth}
+              onStatusToggle={toggleTimetableStatus}
+              onTaskSelect={setViewingTask}
+            />
+          </Panel>
 
           <Panel title="Schedule">
             <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -469,6 +563,7 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
             activeBoardId={activeBoard?.id ?? ""}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             labels={labels}
+            users={users}
             tasks={boardTasks}
             disabled={!activeBoard}
           />
@@ -480,6 +575,8 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
           <WorkspaceForm
             action={updateWorkspaceAndRefresh}
             workspaceId={activeWorkspace.id}
+            ownerId={activeWorkspace.ownerId}
+            users={users}
             name={activeWorkspace.name}
             description={activeWorkspace.description}
           />
@@ -491,6 +588,7 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
           <TodoForm
             action={createTodoAndRefresh}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
+            defaultTaskId={defaultTodoTaskId}
             tasks={boardTasks}
             disabled={!activeWorkspace}
           />
@@ -514,9 +612,32 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
             activeBoardId={editingTask.boardId}
             activeWorkspaceId={activeWorkspace?.id ?? ""}
             labels={labels}
+            users={users}
             tasks={boardTasks.filter((task) => task.id !== editingTask.id)}
             disabled={!activeWorkspace}
             submitLabel="Save task"
+          />
+        </Modal>
+      ) : null}
+
+      {viewingTask ? (
+        <Modal title="Task information" onClose={() => setViewingTask(null)}>
+          <TaskDetails
+            task={viewingTask}
+            tasks={boardTasks}
+            labelById={labelById}
+            workspaceId={activeWorkspaceId}
+            createNoteAction={createTaskNoteAndRefresh}
+          />
+        </Modal>
+      ) : null}
+
+      {notingTask ? (
+        <Modal title="Add task note" onClose={() => setNotingTask(null)}>
+          <TaskNoteForm
+            action={createTaskNoteAndRefresh}
+            workspaceId={activeWorkspaceId}
+            task={notingTask}
           />
         </Modal>
       ) : null}
@@ -556,613 +677,5 @@ export function PlannerWorkspace({ initialSnapshot, initialWorkspaceId }: Planne
         </Modal>
       ) : null}
     </main>
-  );
-}
-
-function DeleteWorkspaceForm({
-  workspaceId,
-  workspaceName,
-  confirmation,
-  onConfirmationChange,
-}: {
-  workspaceId: string;
-  workspaceName: string;
-  confirmation: string;
-  onConfirmationChange: (value: string) => void;
-}) {
-  return (
-    <form action={deleteWorkspace} className="grid gap-3">
-      <input type="hidden" name="workspaceId" value={workspaceId} />
-      <p className="text-sm leading-6 text-[#66736d]">
-        Type <span className="font-semibold text-[#202924]">{workspaceName}</span> to confirm
-        deletion.
-      </p>
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Workspace name confirmation
-        <input
-          value={confirmation}
-          onChange={(event) => onConfirmationChange(event.currentTarget.value)}
-          className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <button
-        type="submit"
-        disabled={confirmation !== workspaceName}
-        className="h-10 rounded-md bg-[#9f1d1d] px-3 text-sm font-semibold text-white disabled:bg-[#d6a6a6]"
-      >
-        Delete workspace
-      </button>
-    </form>
-  );
-}
-
-function WorkspaceForm({
-  action,
-  workspaceId,
-  name,
-  description,
-}: {
-  action: (formData: FormData) => void | Promise<void>;
-  workspaceId: string;
-  name: string;
-  description: string;
-}) {
-  return (
-    <form action={action} className="grid gap-3">
-      <input type="hidden" name="workspaceId" value={workspaceId} />
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Workspace name
-        <input
-          name="name"
-          required
-          minLength={2}
-          defaultValue={name}
-          className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <label className="grid gap-1 text-sm font-medium text-[#3d4742]">
-        Description
-        <textarea
-          name="description"
-          defaultValue={description}
-          rows={4}
-          className="min-h-24 rounded-md border border-[#d6d2c8] px-3 py-2 text-sm font-normal outline-none focus:border-[#1f2623]"
-        />
-      </label>
-      <button
-        type="submit"
-        className="h-10 rounded-md bg-[#1f2623] px-3 text-sm font-semibold text-white"
-      >
-        Save workspace
-      </button>
-    </form>
-  );
-}
-
-function TaskForm({
-  action,
-  task,
-  activeBoardId,
-  activeWorkspaceId,
-  labels,
-  tasks,
-  disabled,
-  submitLabel = "Create task",
-}: {
-  action: (formData: FormData) => void | Promise<void>;
-  task?: Task;
-  activeBoardId: string;
-  activeWorkspaceId: string;
-  labels: PlanningSnapshot["labels"];
-  tasks: Task[];
-  disabled: boolean;
-  submitLabel?: string;
-}) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [startDate, setStartDate] = useState(task?.startDate ?? today);
-  const [dueDate, setDueDate] = useState(task?.dueDate ?? today);
-  const [estimateHours, setEstimateHours] = useState(
-    String(task?.estimateHours ?? calculateEstimateHours(task?.startDate ?? today, task?.dueDate ?? today)),
-  );
-  const [estimateEdited, setEstimateEdited] = useState(false);
-
-  function changeStartDate(value: string) {
-    setStartDate(value);
-    const nextDueDate = value > dueDate ? value : dueDate;
-    setDueDate(nextDueDate);
-    if (!estimateEdited) {
-      setEstimateHours(String(calculateEstimateHours(value, nextDueDate)));
-    }
-  }
-
-  function changeDueDate(value: string) {
-    const nextStartDate = value < startDate ? value : startDate;
-    setStartDate(nextStartDate);
-    setDueDate(value);
-    if (!estimateEdited) {
-      setEstimateHours(String(calculateEstimateHours(nextStartDate, value)));
-    }
-  }
-
-  return (
-    <form action={action}>
-      {task ? <input type="hidden" name="taskId" value={task.id} /> : null}
-      <input type="hidden" name="workspaceId" value={activeWorkspaceId} />
-      <input type="hidden" name="boardId" value={activeBoardId} />
-      <div className="grid gap-2 sm:grid-cols-2">
-        <Field label="Task title">
-          <input name="title" required minLength={2} defaultValue={task?.title} placeholder="Task title" disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Assignee">
-          <input name="assignee" defaultValue={task?.assignee ?? "You"} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Description" className="sm:col-span-2">
-          <textarea name="description" defaultValue={task?.description} placeholder="Description" disabled={disabled} rows={4} className="min-h-24 rounded-md border border-[#d6d2c8] px-3 py-2 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Status">
-          <select name="status" defaultValue={task?.status ?? "backlog"} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]">
-            {defaultColumnOrder.map((status) => (
-              <option key={status} value={status}>{columnLabels[status]}</option>
-            ))}
-          </select>
-        </Field>
-        <Field label="Priority">
-          <select name="priority" defaultValue={task?.priority ?? "Medium"} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]">
-            <option>Low</option><option>Medium</option><option>High</option>
-          </select>
-        </Field>
-        <Field label="Start date">
-          <input name="startDate" type="date" required value={startDate} max={dueDate} onChange={(event) => changeStartDate(event.currentTarget.value)} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Due date">
-          <input name="dueDate" type="date" required value={dueDate} min={startDate} onChange={(event) => changeDueDate(event.currentTarget.value)} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Estimate hours">
-          <input name="estimateHours" type="number" min={1} max={200} value={estimateHours} onChange={(event) => {
-            setEstimateEdited(true);
-            setEstimateHours(event.currentTarget.value);
-          }} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Tags">
-          <input name="tags" defaultValue={task?.tags.join(", ")} placeholder="tags, comma separated" disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        <Field label="Labels">
-          <select name="labels" multiple defaultValue={task?.labels} disabled={disabled || labels.length === 0} className="min-h-20 rounded-md border border-[#d6d2c8] px-3 py-2 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]">
-            {labels.map((label) => <option key={label.id} value={label.id}>{label.name}</option>)}
-          </select>
-        </Field>
-        <Field label="Dependencies">
-          <select name="dependencies" multiple defaultValue={task?.dependencies} disabled={disabled || tasks.length === 0} className="min-h-20 rounded-md border border-[#d6d2c8] px-3 py-2 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]">
-            {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
-          </select>
-        </Field>
-        <button
-          type="submit"
-          disabled={disabled}
-          className="h-10 rounded-md bg-[#1f2623] px-3 text-sm font-semibold text-white disabled:bg-[#9aa39d] sm:col-span-2"
-        >
-          {submitLabel}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function TodoForm({
-  action,
-  todo,
-  activeWorkspaceId,
-  tasks,
-  disabled,
-  submitLabel = "Create todo",
-}: {
-  action: (formData: FormData) => void | Promise<void>;
-  todo?: TodoItem;
-  activeWorkspaceId: string;
-  tasks: Task[];
-  disabled: boolean;
-  submitLabel?: string;
-}) {
-  return (
-    <form action={action}>
-      {todo ? <input type="hidden" name="todoId" value={todo.id} /> : null}
-      <input type="hidden" name="workspaceId" value={activeWorkspaceId} />
-      <div className="grid gap-2">
-        <Field label="Linked task">
-          <select name="taskId" defaultValue={todo?.taskId ?? ""} disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]">
-            <option value="">No task</option>
-            {tasks.map((task) => <option key={task.id} value={task.id}>{task.title}</option>)}
-          </select>
-        </Field>
-        <Field label="Todo title">
-          <input name="title" required minLength={2} defaultValue={todo?.title} placeholder="Todo title" disabled={disabled} className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623] disabled:bg-[#f4f1ea]" />
-        </Field>
-        {todo ? (
-          <label className="flex items-center gap-2 text-sm text-[#3d4742]">
-            <input
-              name="done"
-              type="checkbox"
-              defaultChecked={todo.done}
-              className="h-4 w-4 accent-[#1f7a4d]"
-            />
-            Done
-          </label>
-        ) : null}
-        <button
-          type="submit"
-          disabled={disabled}
-          className="h-10 rounded-md bg-[#1f2623] px-3 text-sm font-semibold text-white disabled:bg-[#9aa39d]"
-        >
-          {submitLabel}
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function LabelForm({
-  action,
-  activeWorkspaceId,
-  label,
-  submitLabel = "Create label",
-}: {
-  action: (formData: FormData) => void | Promise<void>;
-  activeWorkspaceId: string;
-  label?: Label;
-  submitLabel?: string;
-}) {
-  return (
-    <form action={action} className="grid gap-3">
-      {label ? <input type="hidden" name="labelId" value={label.id} /> : null}
-      <input type="hidden" name="workspaceId" value={activeWorkspaceId} />
-      <Field label="Label name">
-        <input
-          name="name"
-          required
-          minLength={2}
-          maxLength={40}
-          defaultValue={label?.name}
-          placeholder="Frontend"
-          className="h-10 rounded-md border border-[#d6d2c8] px-3 text-sm outline-none focus:border-[#1f2623]"
-        />
-      </Field>
-      <Field label="Color">
-        <input
-          name="color"
-          type="color"
-          defaultValue={label?.color ?? "#35624a"}
-          className="h-10 w-full rounded-md border border-[#d6d2c8] px-2 py-1 outline-none focus:border-[#1f2623]"
-        />
-      </Field>
-      <button
-        type="submit"
-        className="h-10 rounded-md bg-[#1f2623] px-3 text-sm font-semibold text-white"
-      >
-        {submitLabel}
-      </button>
-    </form>
-  );
-}
-
-function Modal({
-  title,
-  children,
-  onClose,
-}: {
-  title: string;
-  children: React.ReactNode;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 px-4">
-      <section className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg border border-[#dedbd2] bg-white p-4 shadow-xl">
-        <div className="mb-4 flex items-center justify-between gap-3">
-          <h2 className="text-sm font-semibold text-[#202924]">{title}</h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="h-8 rounded-md border border-[#d6d2c8] px-3 text-sm font-medium text-[#3d4742]"
-          >
-            Close
-          </button>
-        </div>
-        {children}
-      </section>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  children,
-  className = "",
-}: {
-  label: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <label className={`grid gap-1 text-sm font-medium text-[#3d4742] ${className}`}>
-      {label}
-      {children}
-    </label>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border border-[#dedbd2] bg-white px-4 py-3">
-      <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[#68736d]">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-[#202924]">{value}</p>
-    </div>
-  );
-}
-
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-lg border border-[#dedbd2] bg-[#fbfaf7] p-3">
-      <h2 className="mb-3 text-sm font-semibold text-[#2d3632]">{title}</h2>
-      {children}
-    </section>
-  );
-}
-
-function TodoGroup({
-  title,
-  completeCount,
-  totalCount,
-  children,
-}: {
-  title: string;
-  completeCount: number;
-  totalCount: number;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-md border border-[#dedbd2] bg-white">
-      <div className="flex items-center justify-between gap-3 border-b border-[#ece8dd] px-3 py-2">
-        <h3 className="text-sm font-semibold text-[#202924]">{title}</h3>
-        <span className="shrink-0 rounded-md bg-[#e8f0ea] px-2 py-1 text-xs font-semibold text-[#2e6241]">
-          {completeCount}/{totalCount} done
-        </span>
-      </div>
-      <div className="divide-y divide-[#ece8dd]">{children}</div>
-    </section>
-  );
-}
-
-function TodoRow({
-  todo,
-  subtitle,
-  onToggle,
-  onEdit,
-  deleteAction,
-}: {
-  todo: TodoItem;
-  subtitle: string;
-  onToggle: (done: boolean) => void;
-  onEdit: () => void;
-  deleteAction: (formData: FormData) => void | Promise<void>;
-}) {
-  return (
-    <div className="flex items-start gap-3 px-3 py-2 text-sm">
-      <input
-        type="checkbox"
-        checked={todo.done}
-        onChange={(event) => onToggle(event.currentTarget.checked)}
-        className="mt-1 h-4 w-4 accent-[#1f7a4d]"
-      />
-      <div className="min-w-0 flex-1">
-        <p
-          className={`font-medium ${
-            todo.done ? "text-[#7a837d] line-through" : "text-[#202924]"
-          }`}
-        >
-          {todo.title}
-        </p>
-        <p className="mt-1 text-xs text-[#68736d]">{subtitle}</p>
-      </div>
-      <TodoActions todo={todo} onEdit={onEdit} deleteAction={deleteAction} />
-    </div>
-  );
-}
-
-function TodoActions({
-  todo,
-  onEdit,
-  deleteAction,
-}: {
-  todo: TodoItem;
-  onEdit: () => void;
-  deleteAction: (formData: FormData) => void | Promise<void>;
-}) {
-  return (
-    <span className="ml-auto shrink-0">
-      <ActionDropdown>
-      <button
-        type="button"
-        onClick={(event) => {
-          event.preventDefault();
-          onEdit();
-        }}
-        className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea]"
-      >
-        Edit
-      </button>
-      <form action={deleteAction}>
-        <input type="hidden" name="workspaceId" value={todo.workspaceId} />
-        <input type="hidden" name="todoId" value={todo.id} />
-        <button
-          type="submit"
-          onClick={(event) => event.stopPropagation()}
-          className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#9f1d1d] hover:bg-[#fde8e8]"
-        >
-          Delete
-        </button>
-      </form>
-      </ActionDropdown>
-    </span>
-  );
-}
-
-function TaskCard({
-  task,
-  tasks,
-  labelById,
-  onDragStart,
-  onToggleTodo,
-  onEdit,
-  deleteAction,
-  workspaceId,
-}: {
-  task: Task;
-  tasks: Task[];
-  labelById: Map<string, { id: string; name: string; color: string }>;
-  onDragStart: () => void;
-  onToggleTodo: (taskId: string, todoId: string, done: boolean) => void;
-  onEdit: () => void;
-  deleteAction: (formData: FormData) => void | Promise<void>;
-  workspaceId: string;
-}) {
-  const dependencies = task.dependencies
-    .map((dependencyId) => tasks.find((candidate) => candidate.id === dependencyId)?.title)
-    .filter(Boolean);
-  const completedTodos = task.checklist.filter((todo) => todo.done).length;
-
-  return (
-    <article
-      draggable
-      onDragStart={onDragStart}
-      className="cursor-grab rounded-lg border border-[#d9d5ca] bg-white p-3 shadow-sm transition hover:border-[#a6ada6] active:cursor-grabbing"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-semibold leading-5 text-[#202924]">{task.title}</h3>
-          <p className="mt-2 text-xs leading-5 text-[#64706a]">{task.description}</p>
-        </div>
-        <span
-          className={`shrink-0 rounded-md px-2 py-1 text-xs font-semibold ${task.priority === "High"
-              ? "bg-[#fde8e8] text-[#9f1d1d]"
-              : task.priority === "Medium"
-                ? "bg-[#fff0cf] text-[#7a4f00]"
-                : "bg-[#e8f0ea] text-[#2e6241]"
-            }`}
-        >
-          {task.priority}
-        </span>
-      </div>
-
-      <div className="mt-3">
-        <ActionDropdown>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#24302a] hover:bg-[#f4f1ea]"
-        >
-          Edit
-        </button>
-        <form action={deleteAction}>
-          <input type="hidden" name="workspaceId" value={workspaceId} />
-          <input type="hidden" name="taskId" value={task.id} />
-          <button
-            type="submit"
-            onClick={(event) => {
-              if (!window.confirm(`Delete task "${task.title}"?`)) {
-                event.preventDefault();
-              }
-            }}
-            className="w-full rounded-md px-3 py-2 text-left text-xs font-semibold text-[#9f1d1d] hover:bg-[#fde8e8]"
-          >
-            Delete
-          </button>
-        </form>
-        </ActionDropdown>
-      </div>
-
-      <div className="mt-3 flex flex-wrap gap-1.5">
-        {task.labels.map((labelId) => {
-          const label = labelById.get(labelId);
-
-          return label ? (
-            <span
-              key={label.id}
-              className="rounded-md px-2 py-1 text-xs font-semibold text-white"
-              style={{ backgroundColor: label.color }}
-            >
-              {label.name}
-            </span>
-          ) : null;
-        })}
-        {task.tags.map((tag) => (
-          <span
-            key={tag}
-            className="rounded-md border border-[#dedbd2] bg-[#f4f1ea] px-2 py-1 text-xs font-medium text-[#58635d]"
-          >
-            #{tag}
-          </span>
-        ))}
-      </div>
-
-      <dl className="mt-4 grid grid-cols-2 gap-2 text-xs text-[#64706a]">
-        <div>
-          <dt className="font-semibold text-[#3b463f]">Window</dt>
-          <dd>
-            {formatShortDate(task.startDate)} to {formatShortDate(task.dueDate)}
-          </dd>
-        </div>
-        <div>
-          <dt className="font-semibold text-[#3b463f]">Todos</dt>
-          <dd>
-            {completedTodos}/{task.checklist.length} done
-          </dd>
-        </div>
-      </dl>
-
-      {dependencies.length > 0 ? (
-        <div className="mt-3 rounded-md bg-[#f4f1ea] p-2 text-xs leading-5 text-[#58635d]">
-          <span className="font-semibold text-[#3b463f]">Blocked by: </span>
-          {dependencies.join(", ")}
-        </div>
-      ) : null}
-
-      <div className="mt-3 space-y-2 border-t border-[#ece8dd] pt-3">
-        {task.checklist.map((todo) => (
-          <label key={todo.id} className="flex cursor-pointer items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={todo.done}
-              onChange={(event) => onToggleTodo(task.id, todo.id, event.currentTarget.checked)}
-              className="h-3.5 w-3.5 accent-[#1f7a4d]"
-            />
-            <span className={todo.done ? "text-[#7a837d] line-through" : "text-[#47534d]"}>
-              {todo.title}
-            </span>
-          </label>
-        ))}
-      </div>
-    </article>
-  );
-}
-
-function ActionDropdown({
-  children,
-  align = "left",
-}: {
-  children: React.ReactNode;
-  align?: "left" | "right";
-}) {
-  return (
-    <details className="relative inline-block">
-      <summary className="flex h-8 cursor-pointer list-none items-center rounded-md border border-[#d6d2c8] bg-white px-3 text-xs font-semibold text-[#24302a]">
-        Actions
-      </summary>
-      <div
-        className={`absolute z-20 mt-2 min-w-32 rounded-md border border-[#dedbd2] bg-white p-1 shadow-lg ${
-          align === "right" ? "right-0" : "left-0"
-        }`}
-      >
-        {children}
-      </div>
-    </details>
   );
 }
