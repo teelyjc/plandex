@@ -25,6 +25,8 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
       .map((task) =>
         [
           task.id,
+          task.ownerId,
+          task.assigneeId,
           task.title,
           task.description,
           task.status,
@@ -36,12 +38,14 @@ export default async function WorkspacePage({ params }: WorkspacePageProps) {
           task.labels.join(","),
           task.tags.join(","),
           task.dependencies.join(","),
+          task.notes.map((note) => `${note.id}:${note.content}:${note.createdAt}`).join(","),
           task.checklist.map((todo) => `${todo.id}:${todo.title}:${todo.done}`).join(","),
         ].join("~"),
       )
       .join("|"),
     snapshot.todos.map((todo) => `${todo.id}:${todo.title}:${todo.done}:${todo.taskId}`).join("|"),
     snapshot.labels.map((label) => `${label.id}:${label.name}:${label.color}`).join("|"),
+    snapshot.users.map((user) => `${user.id}:${user.name}:${user.color}`).join("|"),
   ].join(":");
 
   return <PlannerWorkspace key={snapshotKey} initialSnapshot={snapshot} initialWorkspaceId={id} />;
