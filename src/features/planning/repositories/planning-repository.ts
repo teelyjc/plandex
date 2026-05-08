@@ -9,6 +9,13 @@ type DatabaseLabel = {
   color: string;
 };
 
+type DatabaseUser = {
+  id: string;
+  name: string;
+  email: string | null;
+  color: string;
+};
+
 type DatabaseBoard = {
   id: string;
   workspaceId: string;
@@ -20,8 +27,10 @@ type DatabaseBoard = {
 
 type DatabaseWorkspace = {
   id: string;
+  ownerId: string | null;
   name: string;
   description: string;
+  owner: DatabaseUser | null;
   boards: DatabaseBoard[];
   todos: DatabaseTodo[];
 };
@@ -29,11 +38,15 @@ type DatabaseWorkspace = {
 type DatabaseTask = {
   id: string;
   boardId: string;
+  ownerId: string | null;
+  assigneeId: string | null;
   title: string;
   description: string;
   status: string;
   priority: string;
   assignee: string;
+  owner: DatabaseUser | null;
+  assigneeUser: DatabaseUser | null;
   startDate: Date;
   dueDate: Date;
   estimateHours: number;
@@ -43,6 +56,14 @@ type DatabaseTask = {
   }>;
   dependencies: Array<{
     dependencyId: string;
+  }>;
+  notes: Array<{
+    id: string;
+    taskId: string;
+    authorId: string | null;
+    author: DatabaseUser | null;
+    content: string;
+    createdAt: Date;
   }>;
   checklist: Array<{
     id: string;
@@ -62,6 +83,9 @@ type DatabaseTodo = {
 };
 
 type PlanningReadClient = {
+  user: {
+    findMany: (args: unknown) => Promise<DatabaseUser[]>;
+  };
   workspace: {
     findMany: (args: unknown) => Promise<DatabaseWorkspace[]>;
   };
@@ -73,10 +97,14 @@ type PlanningReadClient = {
 export async function findPlanningSnapshot(workspaceId?: string) {
   try {
     const prisma = (await getPrismaClient()) as unknown as PlanningReadClient;
-    const [workspaces, labels] = await Promise.all([
+    const [users, workspaces, labels] = await Promise.all([
+      prisma.user.findMany({
+        orderBy: { createdAt: "asc" },
+      }),
       prisma.workspace.findMany({
         orderBy: { createdAt: "asc" },
         include: {
+          owner: true,
           boards: {
             orderBy: { createdAt: "asc" },
             include: {
@@ -85,6 +113,14 @@ export async function findPlanningSnapshot(workspaceId?: string) {
                 include: {
                   labels: true,
                   dependencies: true,
+                  owner: true,
+                  assigneeUser: true,
+                  notes: {
+                    orderBy: { createdAt: "desc" },
+                    include: {
+                      author: true,
+                    },
+                  },
                   checklist: {
                     orderBy: { createdAt: "asc" },
                   },
@@ -112,10 +148,13 @@ export async function findPlanningSnapshot(workspaceId?: string) {
       .flatMap((workspace) => workspace.todos);
 
     return {
+      users: users.map(mapUser),
       workspaces: workspaces.map((workspace) => ({
         id: workspace.id,
+        ownerId: workspace.ownerId,
         name: workspace.name,
         description: workspace.description,
+        owner: workspace.owner ? mapUser(workspace.owner) : null,
       })),
       boards: boards.map((board) => ({
         id: board.id,
@@ -133,17 +172,29 @@ export async function findPlanningSnapshot(workspaceId?: string) {
         board.tasks.map((task) => ({
           id: task.id,
           boardId: task.boardId,
+          ownerId: task.ownerId,
+          assigneeId: task.assigneeId,
           title: task.title,
           description: task.description,
           status: parseStatus(task.status),
           priority: parsePriority(task.priority),
           assignee: task.assignee,
+          owner: task.owner ? mapUser(task.owner) : null,
+          assigneeUser: task.assigneeUser ? mapUser(task.assigneeUser) : null,
           startDate: toDateInputValue(task.startDate),
           dueDate: toDateInputValue(task.dueDate),
           estimateHours: task.estimateHours,
           labels: task.labels.map((label) => label.labelId),
           tags: parseTags(task.tags),
           dependencies: task.dependencies.map((dependency) => dependency.dependencyId),
+          notes: task.notes.map((note) => ({
+            id: note.id,
+            taskId: note.taskId,
+            authorId: note.authorId,
+            author: note.author ? mapUser(note.author) : null,
+            content: note.content,
+            createdAt: toDateInputValue(note.createdAt),
+          })),
           checklist: task.checklist.map((todo) => ({
             id: todo.id,
             workspaceId: todo.workspaceId,
@@ -169,11 +220,21 @@ export async function findPlanningSnapshot(workspaceId?: string) {
 
 function getEmptyPlanningSnapshot(): PlanningSnapshot {
   return {
+    users: [],
     workspaces: [],
     boards: [],
     labels: [],
     tasks: [],
     todos: [],
+  };
+}
+
+function mapUser(user: DatabaseUser) {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    color: user.color,
   };
 }
 
